@@ -1,8 +1,8 @@
 use ark_ec::AffineCurve;
 use ark_ff::{PrimeField, BigInteger, FromBytes};
 use rust_rw_device::rw_msm_to_dram::msm_core;
+use std::io::Cursor;
 
-// const BYTE_SIZE_POINT_COORD: usize = 48;
 const BYTE_SIZE_SCALAR: usize = 32;
 
 fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec<u8> {
@@ -10,21 +10,21 @@ fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec
         In order to determine point size we can write zero to buffer. 
         It writes: (x, y, is_zero_byte) so point size is (buff_size - 1) / 2, or just integer / 2 since 1 will be a reminder
      */
-    let mut buff = vec![]; 
+    let mut buff = Cursor::new(Vec::<u8>::new());
     G::zero().write(&mut buff).unwrap();
-    let point_size = buff.len() / 2;
+    let point_size = buff.get_ref().len() / 2;
 
     let mut points_buffer: Vec<u8> = vec![0; points.len() * 2 * point_size];
 
     for (i, base) in points.iter().enumerate() {
-        // reset buffer in each iteration and allocate space for x, y and indicator if point is identity
-        let mut buff = Vec::<u8>::with_capacity(2 * point_size + 1); 
+        // reset buffer in each iteration
+        buff.set_position(0); 
         base.write(&mut buff).unwrap();
 
         // write y
-        points_buffer[2*i*point_size..(2*i+1)*point_size].copy_from_slice(&buff[point_size..2*point_size]);
+        points_buffer[2*i*point_size..(2*i+1)*point_size].copy_from_slice(&buff.get_ref()[point_size..2*point_size]);
         // write x
-        points_buffer[(2*i+1)*point_size..(2*i+2)*point_size].copy_from_slice(&buff[0..point_size]);
+        points_buffer[(2*i+1)*point_size..(2*i+2)*point_size].copy_from_slice(&buff.get_ref()[0..point_size]);
     }
 
     points_buffer
@@ -62,12 +62,13 @@ impl FpgaVariableBaseMSM {
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::{G1Affine};
+    use ark_bls12_377::{G1Affine, G1Projective};
     use ark_ec::{AffineCurve, ProjectiveCurve};
-    use ark_ff::{UniformRand, PrimeField};
+    use ark_ff::{UniformRand, PrimeField, ToBytes, Zero};
     use ark_std::{test_rng, rand::Rng};
     use num_bigint::BigUint;
     use super::get_formatted_unified_points_from_affine;
+    use std::io::Cursor;
 
     const BYTE_SIZE_POINT_COORD: usize = 48; // for BLS
 
