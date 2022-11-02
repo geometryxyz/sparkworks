@@ -2,7 +2,7 @@ use ark_ec::AffineCurve;
 use ark_ff::{PrimeField, BigInteger, FromBytes};
 use rust_rw_device::rw_msm_to_dram::msm_core;
 
-const BYTE_SIZE_POINT_COORD: usize = 48;
+// const BYTE_SIZE_POINT_COORD: usize = 48;
 const BYTE_SIZE_SCALAR: usize = 32;
 
 fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec<u8> {
@@ -10,7 +10,7 @@ fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec
     G::zero().write(&mut buff).unwrap();
     let point_size = buff.len() / 2;
 
-    let mut points_buffer: Vec<u8> = vec![0; points.len() * 2 * BYTE_SIZE_POINT_COORD];
+    let mut points_buffer: Vec<u8> = vec![0; points.len() * 2 * point_size];
 
     for (i, base) in points.iter().enumerate() {
         // reset buffer in each iteration and allocate space for x, y and indicator if point is identity
@@ -19,9 +19,9 @@ fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec
 
         // NOTE: We don't need to extend with 0s since points_buffer is already initialized with zeroes
         // write y
-        points_buffer[2*i*BYTE_SIZE_POINT_COORD..(2*i+1)*point_size].copy_from_slice(&buff[point_size..2*point_size]);
+        points_buffer[2*i*point_size..(2*i+1)*point_size].copy_from_slice(&buff[point_size..2*point_size]);
         // write x
-        points_buffer[(2*i+1)*BYTE_SIZE_POINT_COORD..(2*i+2)*point_size].copy_from_slice(&buff[0..point_size]);
+        points_buffer[(2*i+1)*point_size..(2*i+2)*point_size].copy_from_slice(&buff[0..point_size]);
     }
 
     points_buffer
@@ -64,7 +64,9 @@ mod test {
     use ark_ff::{UniformRand, PrimeField};
     use ark_std::{test_rng, rand::Rng};
     use num_bigint::BigUint;
-    use super::{BYTE_SIZE_POINT_COORD, get_formatted_unified_points_from_affine};
+    use super::get_formatted_unified_points_from_affine;
+
+    const BYTE_SIZE_POINT_COORD: usize = 48; // for BLS
 
     // ingonyama's implementation for asserting equality 
     fn get_formatted_unified_points_from_biguint(points: &Vec<BigUint>) -> Vec<u8> {
