@@ -62,13 +62,12 @@ impl FpgaVariableBaseMSM {
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::{G1Affine, G1Projective};
+    use ark_bls12_377::G1Affine;
     use ark_ec::{AffineCurve, ProjectiveCurve};
-    use ark_ff::{UniformRand, PrimeField, ToBytes, Zero};
+    use ark_ff::{UniformRand, PrimeField};
     use ark_std::{test_rng, rand::Rng};
     use num_bigint::BigUint;
     use super::get_formatted_unified_points_from_affine;
-    use std::io::Cursor;
 
     const BYTE_SIZE_POINT_COORD: usize = 48; // for BLS
 
