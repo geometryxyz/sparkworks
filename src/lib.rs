@@ -6,6 +6,10 @@ use rust_rw_device::rw_msm_to_dram::msm_core;
 const BYTE_SIZE_SCALAR: usize = 32;
 
 fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec<u8> {
+    /*
+        In order to determine point size we can write zero to buffer. 
+        It writes: (x, y, is_zero_byte) so point size is (buff_size - 1) / 2, or just integer / 2 since 1 will be a reminder
+     */
     let mut buff = vec![]; 
     G::zero().write(&mut buff).unwrap();
     let point_size = buff.len() / 2;
@@ -17,7 +21,6 @@ fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec
         let mut buff = Vec::<u8>::with_capacity(2 * point_size + 1); 
         base.write(&mut buff).unwrap();
 
-        // NOTE: We don't need to extend with 0s since points_buffer is already initialized with zeroes
         // write y
         points_buffer[2*i*point_size..(2*i+1)*point_size].copy_from_slice(&buff[point_size..2*point_size]);
         // write x
