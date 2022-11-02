@@ -47,6 +47,10 @@ impl FpgaVariableBaseMSM {
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
     ) -> G::Projective {
+        let size = std::cmp::min(bases.len(), scalars.len());
+        let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
+        let bases = &bases[..size];
+
         let points_bytes = get_formatted_unified_points_from_affine(bases);
         let scalars_bytes = get_formatted_unified_scalars_from_bigint::<G>(scalars);
 
