@@ -9,3 +9,9 @@ edition = "2021"
 ark-ec = { version="^0.3.0", default-features = false }
 ark-ff = { version="^0.3.0", default-features = false }
 rust-rw-device = { git = "https://github.com/ingonyama-zk/cloud-ZK.git" }
+
+[dev-dependencies]
+ark-bls12-377 = "0.3.0"
+ark-bn254 = "0.3.0"
+ark-std = "0.3.0"
+num-bigint = "0.4.3"
