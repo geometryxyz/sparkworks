@@ -46,7 +46,7 @@ impl FpgaVariableBaseMSM {
     pub fn multi_scalar_mul<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
-    ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, G::Projective) {
+    ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
         let bases = &bases[..size];
@@ -56,18 +56,19 @@ impl FpgaVariableBaseMSM {
 
         let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes.clone(), scalars_bytes.clone(), scalars.len());
 
-        let mut result_buffer = Vec::new(); 
-        result_buffer.extend_from_slice(&x_chunk);
-        result_buffer.extend_from_slice(&y_chunk);
-        result_buffer.extend_from_slice(&z_chunk);
+        // let mut result_buffer = Vec::new(); 
+        // result_buffer.extend_from_slice(&x_chunk);
+        // result_buffer.extend_from_slice(&y_chunk);
+        // result_buffer.extend_from_slice(&z_chunk);
+        // G::Projective::read(result_buffer.as_slice()).unwrap()
 
-        (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk, G::Projective::read(result_buffer.as_slice()).unwrap())
+        (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::{G1Affine, G1Projective};
+    use ark_bls12_377::{G1Affine, G1Projective, Fq};
     use ark_ec::{AffineCurve, ProjectiveCurve};
     use ark_ff::{UniformRand, PrimeField, ToBytes, Zero};
     use ark_std::{test_rng, rand::Rng};
@@ -129,6 +130,8 @@ mod test {
         println!("y: {}", point.y);
         println!("z: {}", point.z);
 
-        println!("{:?}, {}", buff, buff.len());
+        // let buff = vec![Fq::zero(); 144];
+
+        println!("{:?}, {}", buff.iter().take(48), buff.len());
     }
 }
