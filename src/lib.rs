@@ -55,6 +55,12 @@ impl FpgaVariableBaseMSM {
         let scalars_bytes = get_formatted_unified_scalars_from_bigint::<G>(scalars);
 
         let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes, scalars_bytes, scalars.len());
+
+        println!("x_chunk: {:?}", x_chunk);
+        println!("y_chunk: {:?}", y_chunk);
+        println!("z_chunk: {:?}", z_chunk);
+
+
         let mut result_buffer = Vec::new(); 
         result_buffer.extend_from_slice(&x_chunk);
         result_buffer.extend_from_slice(&y_chunk);
@@ -66,9 +72,9 @@ impl FpgaVariableBaseMSM {
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::G1Affine;
+    use ark_bls12_377::{G1Affine, G1Projective};
     use ark_ec::{AffineCurve, ProjectiveCurve};
-    use ark_ff::{UniformRand, PrimeField};
+    use ark_ff::{UniformRand, PrimeField, ToBytes, Zero};
     use ark_std::{test_rng, rand::Rng};
     use num_bigint::BigUint;
     use super::get_formatted_unified_points_from_affine;
@@ -111,5 +117,23 @@ mod test {
         let point_bytes_affine = get_formatted_unified_points_from_affine(&points);
 
         assert_eq!(point_bytes_biguint, point_bytes_affine);
+    }
+
+    #[test]
+    fn test_projective_read() {
+        let mut rng = test_rng();
+
+        let point = G1Projective::rand(&mut rng); 
+        let point = G1Projective::zero(); 
+
+        let mut buff = vec![];
+
+        point.write(&mut buff).unwrap();
+
+        println!("x: {}", point.x);
+        println!("y: {}", point.y);
+        println!("z: {}", point.z);
+
+        println!("{:?}, {}", buff, buff.len());
     }
 }
