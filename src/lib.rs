@@ -46,7 +46,7 @@ impl FpgaVariableBaseMSM {
     pub fn multi_scalar_mul<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
-    ) -> (Vec<u8>, Vec<u8>, Vec<u8>, G::Projective) {
+    ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, G::Projective) {
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
         let bases = &bases[..size];
@@ -54,14 +54,14 @@ impl FpgaVariableBaseMSM {
         let points_bytes = get_formatted_unified_points_from_affine(bases);
         let scalars_bytes = get_formatted_unified_scalars_from_bigint::<G>(scalars);
 
-        let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes, scalars_bytes, scalars.len());
+        let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes.clone(), scalars_bytes.clone(), scalars.len());
 
         let mut result_buffer = Vec::new(); 
         result_buffer.extend_from_slice(&x_chunk);
         result_buffer.extend_from_slice(&y_chunk);
         result_buffer.extend_from_slice(&z_chunk);
 
-        (z_chunk, y_chunk, x_chunk, G::Projective::read(result_buffer.as_slice()).unwrap())
+        (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk, G::Projective::read(result_buffer.as_slice()).unwrap())
     }
 }
 
