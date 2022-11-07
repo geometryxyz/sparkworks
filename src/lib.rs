@@ -1,13 +1,12 @@
 use ark_ec::AffineCurve;
-use ark_ff::{PrimeField, BigInteger, FromBytes, ToBytes, Field, BigInteger384, BigInteger256};
+use ark_ff::{PrimeField, BigInteger, ToBytes, Field};
 use rust_rw_device::rw_msm_to_dram::msm_core;
-use core::num;
 use std::io::Cursor;
 use std::ops::Mul;
 
 const BYTE_SIZE_SCALAR: usize = 32;
 
-fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec<u8> {
+fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> (Vec<u8>, usize) {
     /*
         In order to determine point size we can write zero to buffer. 
         It writes: (x, y, is_zero_byte) so point size is (buff_size - 1) / 2, or just integer / 2 since 1 will be a reminder
@@ -29,7 +28,7 @@ fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> Vec
         points_buffer[(2*i+1)*point_size..(2*i+2)*point_size].copy_from_slice(&buff.get_ref()[0..point_size]);
     }
 
-    points_buffer
+    (points_buffer, buff.get_ref().len())
 }
 
 fn get_formatted_unified_scalars_from_bigint<G: AffineCurve>(scalars: &[<G::ScalarField as PrimeField>::BigInt]) -> Vec<u8> {
@@ -53,7 +52,7 @@ impl FpgaVariableBaseMSM {
         let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
         let bases = &bases[..size];
 
-        let points_bytes = get_formatted_unified_points_from_affine(bases);
+        let (points_bytes, buff_size) = get_formatted_unified_points_from_affine(bases);
         let scalars_bytes = get_formatted_unified_scalars_from_bigint::<G>(scalars);
 
         let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes.clone(), scalars_bytes.clone(), scalars.len());
@@ -65,21 +64,20 @@ impl FpgaVariableBaseMSM {
         let aff_x = proj_x_field.mul(proj_z_field.inverse().unwrap());
         let aff_y = proj_y_field.mul(proj_z_field.inverse().unwrap());
 
-        let mut buff = Vec::<u8>::with_capacity(97);
+        let mut buff = Vec::<u8>::with_capacity(buff_size);
         aff_x.write(&mut buff).unwrap();
         aff_y.write(&mut buff).unwrap();
         buff.push(0);
 
         G::read(buff.as_slice()).unwrap().into_projective()
-        // (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::{G1Affine, G1Projective, Fq};
+    use ark_bls12_377::G1Affine;
     use ark_ec::{AffineCurve, ProjectiveCurve};
-    use ark_ff::{UniformRand, PrimeField, ToBytes, Zero};
+    use ark_ff::{UniformRand, PrimeField};
     use ark_std::{test_rng, rand::Rng};
     use num_bigint::BigUint;
     use super::get_formatted_unified_points_from_affine;
@@ -119,50 +117,8 @@ mod test {
         .collect::<Vec<BigUint>>();
 
         let point_bytes_biguint = get_formatted_unified_points_from_biguint(&points_as_big_int);
-        let point_bytes_affine = get_formatted_unified_points_from_affine(&points);
+        let (point_bytes_affine, _) = get_formatted_unified_points_from_affine(&points);
 
         assert_eq!(point_bytes_biguint, point_bytes_affine);
-    }
-
-    #[test]
-    fn test_projective_read() {
-        let mut rng = test_rng();
-
-        let point = G1Projective::rand(&mut rng); 
-        let point = G1Projective::zero(); 
-
-        let mut buff = vec![];
-
-        point.write(&mut buff).unwrap();
-
-        println!("x: {}", point.x);
-        println!("y: {}", point.y);
-        println!("z: {}", point.z);
-
-        // let buff = vec![Fq::zero(); 144];
-
-        println!("{:?}, {}", buff.iter().take(48), buff.len());
-    }
-
-    #[test]
-    fn write_affine() {
-        let mut rng = test_rng();
-
-        let point = G1Projective::rand(&mut rng).into_affine(); 
-
-        let mut buff = vec![];
-
-        // write by coord
-        point.x.write(&mut buff).unwrap();
-        point.y.write(&mut buff).unwrap();
-        buff.push(0);
-
-        // write full 
-        let mut buff_full = vec![];
-        point.write(&mut buff_full).unwrap();
-        
-        assert_eq!(buff, buff_full);
-        // println!("{:?}, {}", buff.iter(), buff.len());
-
     }
 }
