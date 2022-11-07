@@ -1,5 +1,5 @@
 use ark_ec::AffineCurve;
-use ark_ff::{PrimeField, BigInteger, ToBytes, Field};
+use ark_ff::{PrimeField, BigInteger, ToBytes, Field, Zero};
 use rust_rw_device::rw_msm_to_dram::msm_core;
 use std::io::Cursor;
 use std::ops::Mul;
@@ -48,6 +48,10 @@ impl FpgaVariableBaseMSM {
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
     ) -> G::Projective {
+        if scalars.iter().all(|s| s.is_zero()) {
+            return G::Projective::zero()
+        }
+
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
         let bases = &bases[..size];
