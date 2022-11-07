@@ -1,7 +1,9 @@
 use ark_ec::AffineCurve;
-use ark_ff::{PrimeField, BigInteger, FromBytes};
+use ark_ff::{PrimeField, BigInteger, FromBytes, ToBytes, Field, BigInteger384, BigInteger256};
 use rust_rw_device::rw_msm_to_dram::msm_core;
+use core::num;
 use std::io::Cursor;
+use std::ops::Mul;
 
 const BYTE_SIZE_SCALAR: usize = 32;
 
@@ -46,7 +48,7 @@ impl FpgaVariableBaseMSM {
     pub fn multi_scalar_mul<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
-    ) -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
+    ) -> G::Projective {
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
         let bases = &bases[..size];
@@ -56,13 +58,20 @@ impl FpgaVariableBaseMSM {
 
         let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes.clone(), scalars_bytes.clone(), scalars.len());
 
-        // let mut result_buffer = Vec::new(); 
-        // result_buffer.extend_from_slice(&x_chunk);
-        // result_buffer.extend_from_slice(&y_chunk);
-        // result_buffer.extend_from_slice(&z_chunk);
-        // G::Projective::read(result_buffer.as_slice()).unwrap()
+        let proj_x_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&x_chunk);
+        let proj_y_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&y_chunk);
+        let proj_z_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&z_chunk);
 
-        (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk)
+        let aff_x = proj_x_field.mul(proj_z_field.inverse().unwrap());
+        let aff_y = proj_y_field.mul(proj_z_field.inverse().unwrap());
+
+        let mut buff = Vec::<u8>::with_capacity(97);
+        aff_x.write(&mut buff).unwrap();
+        aff_y.write(&mut buff).unwrap();
+        buff.push(0);
+
+        G::read(buff.as_slice()).unwrap().into_projective()
+        // (points_bytes, scalars_bytes, z_chunk, y_chunk, x_chunk)
     }
 }
 
@@ -133,5 +142,27 @@ mod test {
         // let buff = vec![Fq::zero(); 144];
 
         println!("{:?}, {}", buff.iter().take(48), buff.len());
+    }
+
+    #[test]
+    fn write_affine() {
+        let mut rng = test_rng();
+
+        let point = G1Projective::rand(&mut rng).into_affine(); 
+
+        let mut buff = vec![];
+
+        // write by coord
+        point.x.write(&mut buff).unwrap();
+        point.y.write(&mut buff).unwrap();
+        buff.push(0);
+
+        // write full 
+        let mut buff_full = vec![];
+        point.write(&mut buff_full).unwrap();
+        
+        assert_eq!(buff, buff_full);
+        // println!("{:?}, {}", buff.iter(), buff.len());
+
     }
 }
