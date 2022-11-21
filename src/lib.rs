@@ -1,13 +1,18 @@
 use ark_ec::{msm::VariableBaseMSM, AffineCurve};
 use ark_ff::{BigInteger, PrimeField, ToBytes};
+use rayon::{
+    prelude::{IndexedParallelIterator, IntoParallelIterator},
+    slice::ParallelSliceMut,
+};
 
-use std::{any::TypeId, io::Cursor};
+use std::{any::TypeId, io::Cursor, time::Instant};
 
 use ingo_x::curve::*;
 
 use std::mem::size_of;
 
 use ark_ff::Zero;
+use rayon::iter::ParallelIterator;
 
 const BYTE_SIZE_SCALAR: usize = 32;
 
@@ -50,47 +55,55 @@ fn get_formatted_unified_scalars_from_bigint<G: AffineCurve>(
     scalars_bytes
 }
 
-fn points_to_bytes<G: AffineCurve>(points: &[G]) -> Vec<u8> { //TODO: this semi-generic method needs/can to be fully generic?
+fn points_to_bytes<G: AffineCurve>(points: &[G]) -> Vec<u8> {
+    //TODO: this semi-generic method needs/can to be fully generic?
     let mut buff = Vec::<u8>::new();
 
     let field_size = size_of::<G::BaseField>();
 
     if TypeId::of::<G>() == TypeId::of::<G1Affine>() {
         let coord_size = field_size;
-        points.into_iter().for_each(|f| {
-            let mut pbuff = Cursor::new(Vec::<u8>::new());
-            f.write(&mut pbuff).unwrap();
-            let pnt = pbuff.get_ref().to_vec();
-            buff.extend_from_slice(&pnt[coord_size..coord_size * 2]);
-            buff.extend_from_slice(&pnt[..coord_size]);
-        });
+
+        buff.resize(coord_size * 2 * points.len(), 0u8);
+        buff.par_chunks_mut(coord_size * 2)
+            .zip(points)
+            .for_each(|(f, g)| {
+                let mut pbuff = Cursor::new(Vec::<u8>::new());
+                g.write(&mut pbuff).unwrap();
+                let pnt = pbuff.get_ref().to_vec();
+                (*f)[..coord_size].copy_from_slice(&pnt[coord_size..coord_size * 2]);
+                (*f)[coord_size..coord_size * 2].copy_from_slice(&pnt[..coord_size]);
+            });
     } else if TypeId::of::<G>() == TypeId::of::<G2Affine>() {
         let coord_size = field_size / 2;
-        points.into_iter().for_each(|f| {
-            //point.y.c1.into_repr().into(),
-            //point.x.c1.into_repr().into(),
-            //point.y.c0.into_repr().into(),
-            //point.x.c0.into_repr().into(),
-            let mut pbuff = Cursor::new(Vec::<u8>::new());
-            f.write(&mut pbuff).unwrap();
-            let pnt = pbuff.get_ref().to_vec();
-            buff.extend_from_slice(&pnt[coord_size * 3..coord_size * 4]);
-            buff.extend_from_slice(&pnt[coord_size..coord_size * 2]);
-            buff.extend_from_slice(&pnt[coord_size * 2..coord_size * 3]);
-            buff.extend_from_slice(&pnt[..coord_size]);
-        });
+        buff.resize(coord_size * 4 * points.len(), 0u8);
+        buff.par_chunks_mut(coord_size * 4)
+            .zip(points)
+            .for_each(|(f, g)| {
+                let mut pbuff = Cursor::new(Vec::<u8>::new());
+                g.write(&mut pbuff).unwrap();
+                let pnt = pbuff.get_ref().to_vec();
+                (*f)[..coord_size].copy_from_slice(&pnt[coord_size * 3..coord_size * 4]); //point.y.c1
+                (*f)[coord_size..coord_size * 2].copy_from_slice(&pnt[coord_size..coord_size * 2]); //point.x.c1
+                (*f)[coord_size * 2..coord_size * 3]
+                    .copy_from_slice(&pnt[coord_size * 2..coord_size * 3]); //point.y.c0
+                (*f)[coord_size * 3..].copy_from_slice(&pnt[..coord_size]); //point.x.c0
+            });
     } else {
         panic!("unsupported curve")
     }
     buff
 }
 
-fn scalars_to_bytes<G: AffineCurve>(scalars: &[<G::ScalarField as PrimeField>::BigInt]) -> Vec<u8> { //this is generic
-    let mut buff = Cursor::new(Vec::<u8>::new());
-    scalars.into_iter().for_each(|f| {
-        f.write(&mut buff).unwrap();
-    });
-    buff.get_ref().to_vec()
+fn scalars_to_bytes<G: AffineCurve>(scalars: &[<G::ScalarField as PrimeField>::BigInt]) -> Vec<u8> {
+    let scalar_size = size_of::<<G::ScalarField as PrimeField>::BigInt>();
+    let mut buff = vec![0u8; scalar_size * scalars.len()];
+    buff.par_chunks_mut(scalar_size)
+        .zip(scalars)
+        .for_each(|(f, g)| {
+            g.write(&mut Cursor::new(f)).unwrap();
+        });
+    buff
 }
 
 pub struct FpgaVariableBaseMSM;
@@ -100,7 +113,7 @@ impl FpgaVariableBaseMSM {
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
     ) -> G::Projective {
-
+        let start = Instant::now();
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars = &scalars[..size];
         let bases = &bases[..size];
@@ -108,17 +121,39 @@ impl FpgaVariableBaseMSM {
         let mut bases_filtered = Vec::<G>::new();
         let mut scalars_filtered = Vec::<<G::ScalarField as PrimeField>::BigInt>::new();
 
-        for i in 0..size { //filtering zero scalars *AND* zero points is key for Ingo MSM compatibility for current version
+        for i in 0..size {
+            //filtering zero scalars *AND* zero points is key for Ingo MSM compatibility for current version
             if !scalars[i].is_zero() && !bases[i].is_zero() {
                 bases_filtered.push(bases[i]);
                 scalars_filtered.push(scalars[i]);
             }
         }
-
+        let filtering = start.elapsed();
+        println!("filtering elapsed is: {:?} for size: {}", filtering, size);
         let points_bytes = points_to_bytes(&bases_filtered);
+        let points_conversion = start.elapsed() - filtering;
+        println!(
+            "points conversion trait elapsed is: {:?} for size: {}",
+            points_conversion, size
+        );
         let scalars_bytes = scalars_to_bytes::<G>(&scalars_filtered);
-        let ret = ingo_x::msm_cloud_generic::<G>(&points_bytes, &scalars_bytes);
+        let scalars_conversion = start.elapsed() - points_conversion;
+        println!(
+            "scalars conversion trait elapsed is: {:?} for size: {}",
+            scalars_conversion, size
+        );
 
+        let ret = ingo_x::msm_cloud_generic::<G>(&points_bytes, &scalars_bytes);
+        println!(
+            "Ingo msm_cloud_generic elapsed is: {:?} for size: {}",
+            start.elapsed() - scalars_conversion,
+            size
+        );
+        println!(
+            "Ingo trait total elapsed is: {:?} for size: {}",
+            start.elapsed(),
+            size
+        );
         ret.0
     }
 }
