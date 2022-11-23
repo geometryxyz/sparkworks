@@ -1,128 +1,183 @@
-use ark_ec::AffineCurve;
-use ark_ff::{PrimeField, BigInteger, ToBytes, Field, Zero};
-use rust_rw_device::rw_msm_to_dram::msm_core;
-use std::io::Cursor;
 use std::ops::Mul;
 
-const BYTE_SIZE_SCALAR: usize = 32;
+use ark_ec::AffineCurve;
+use ark_ff::{BigInteger, Field, PrimeField, ToBytes};
+use rayon::{prelude::IndexedParallelIterator, slice::ParallelSliceMut};
 
-fn get_formatted_unified_points_from_affine<G: AffineCurve>(points: &[G]) -> (Vec<u8>, usize) {
-    /*
-        In order to determine point size we can write zero to buffer. 
-        It writes: (x, y, is_zero_byte) so point size is (buff_size - 1) / 2, or just integer / 2 since 1 will be a reminder
-     */
-    let mut buff = Cursor::new(Vec::<u8>::new());
-    G::zero().write(&mut buff).unwrap();
-    let point_size = buff.get_ref().len() / 2;
+#[cfg(feature = "ark-bn254")]
+pub use ark_bn254 as curve;
 
-    let mut points_buffer: Vec<u8> = vec![0; points.len() * 2 * point_size];
+use self::curve::{Fq, Fq2, G1Affine, G2Affine};
 
-    for (i, base) in points.iter().enumerate() {
-        // reset buffer in each iteration
-        buff.set_position(0); 
-        base.write(&mut buff).unwrap();
+use rust_rw_device::rw_msm_to_dram as device_g1;
+use rust_rw_device_g2::rw_msm_to_dram as device_g2;
 
-        // write y
-        points_buffer[2*i*point_size..(2*i+1)*point_size].copy_from_slice(&buff.get_ref()[point_size..2*point_size]);
-        // write x
-        points_buffer[(2*i+1)*point_size..(2*i+2)*point_size].copy_from_slice(&buff.get_ref()[0..point_size]);
+use std::{any::TypeId, io::Cursor};
+
+use std::mem::size_of;
+
+use rayon::iter::ParallelIterator;
+
+fn points_to_bytes<G: AffineCurve>(points: &[G]) -> Vec<u8> {
+    let mut buff = Vec::<u8>::new();
+
+    let field_size = size_of::<G::BaseField>();
+
+    if TypeId::of::<G>() == TypeId::of::<G1Affine>() {
+        let coord_size = field_size;
+
+        buff.resize(coord_size * 2 * points.len(), 0u8);
+        buff.par_chunks_mut(coord_size * 2)
+            .zip(points)
+            .for_each(|(f, g)| {
+                let mut pbuff = Cursor::new(Vec::<u8>::new());
+                g.write(&mut pbuff).unwrap();
+                let pnt = pbuff.get_ref().to_vec();
+                (*f)[..coord_size].copy_from_slice(&pnt[coord_size..coord_size * 2]);
+                (*f)[coord_size..coord_size * 2].copy_from_slice(&pnt[..coord_size]);
+            });
+    } else if TypeId::of::<G>() == TypeId::of::<G2Affine>() {
+        let coord_size = field_size / 2;
+        buff.resize(coord_size * 4 * points.len(), 0u8);
+        buff.par_chunks_mut(coord_size * 4)
+            .zip(points)
+            .for_each(|(f, g)| {
+                let mut pbuff = Cursor::new(Vec::<u8>::new());
+                g.write(&mut pbuff).unwrap();
+                let pnt = pbuff.get_ref().to_vec();
+                (*f)[..coord_size].copy_from_slice(&pnt[coord_size * 3..coord_size * 4]); //point.y.c1
+                (*f)[coord_size..coord_size * 2].copy_from_slice(&pnt[coord_size..coord_size * 2]); //point.x.c1
+                (*f)[coord_size * 2..coord_size * 3]
+                    .copy_from_slice(&pnt[coord_size * 2..coord_size * 3]); //point.y.c0
+                (*f)[coord_size * 3..].copy_from_slice(&pnt[..coord_size]); //point.x.c0
+            });
+    } else {
+        panic!("unsupported curve")
     }
-
-    (points_buffer, buff.get_ref().len())
+    buff
 }
 
-fn get_formatted_unified_scalars_from_bigint<G: AffineCurve>(scalars: &[<G::ScalarField as PrimeField>::BigInt]) -> Vec<u8> {
-    let mut scalars_bytes: Vec<u8> = Vec::new();
-    for i in 0..scalars.len(){
-        let mut bytes_array = scalars[i].to_bytes_le();
-        bytes_array.extend(std::iter::repeat(0).take(BYTE_SIZE_SCALAR - bytes_array.len()));
-        scalars_bytes.extend(bytes_array);
-    }
-    scalars_bytes
+fn scalars_to_bytes<G: AffineCurve>(scalars: &[<G::ScalarField as PrimeField>::BigInt]) -> Vec<u8> {
+    let scalar_size = size_of::<<G::ScalarField as PrimeField>::BigInt>();
+    let mut buff = vec![0u8; scalar_size * scalars.len()];
+    buff.par_chunks_mut(scalar_size)
+        .zip(scalars)
+        .for_each(|(f, g)| {
+            g.write(&mut Cursor::new(f)).unwrap();
+        });
+    buff
 }
 
-pub struct FpgaVariableBaseMSM;
+pub struct HardwareVariableBaseMSM;
 
-impl FpgaVariableBaseMSM {
+impl HardwareVariableBaseMSM {
     pub fn multi_scalar_mul<G: AffineCurve>(
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
     ) -> G::Projective {
-        if scalars.iter().all(|s| s.is_zero()) {
-            return G::Projective::zero()
-        }
-
         let size = std::cmp::min(bases.len(), scalars.len());
-        let scalars: &[<G::ScalarField as PrimeField>::BigInt] = &scalars[..size];
+        let scalars = &scalars[..size];
         let bases = &bases[..size];
 
-        let (points_bytes, buff_size) = get_formatted_unified_points_from_affine(bases);
-        let scalars_bytes = get_formatted_unified_scalars_from_bigint::<G>(scalars);
+        let mut bases_filtered = Vec::<G>::new();
+        let mut scalars_filtered = Vec::<<G::ScalarField as PrimeField>::BigInt>::new();
 
-        let (z_chunk, y_chunk, x_chunk, _, _) = msm_core(points_bytes.clone(), scalars_bytes.clone(), scalars.len());
+        for i in 0..size {
+            //filtering zero scalars *AND* zero points is key for Ingo MSM compatibility for current version
+            if !scalars[i].is_zero() && !bases[i].is_zero() {
+                bases_filtered.push(bases[i]);
+                scalars_filtered.push(scalars[i]);
+            }
+        }
+        let points_bytes = points_to_bytes(&bases_filtered);
+        let scalars_bytes = scalars_to_bytes::<G>(&scalars_filtered);
+        let mut buff: Vec<u8>;
+        let scalar_size = size_of::<G::ScalarField>();
+        let size = scalars_bytes.len() / scalar_size;
 
-        let proj_x_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&x_chunk);
-        let proj_y_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&y_chunk);
-        let proj_z_field = <<<G as AffineCurve>::BaseField as Field>::BasePrimeField as PrimeField>::from_le_bytes_mod_order(&z_chunk);
+        if TypeId::of::<G>() == TypeId::of::<G1Affine>() {
+            let (result, _, _) = device_g1::msm_calc(&points_bytes, &scalars_bytes, size);
+            let proj_x_field = Fq::from_random_bytes(&result[0]).unwrap();
+            let proj_y_field = Fq::from_random_bytes(&result[1]).unwrap();
+            let proj_z_field = Fq::from_random_bytes(&result[2]).unwrap();
+            let z_inverse = proj_z_field.inverse().unwrap();
+            let aff_x = proj_x_field.mul(z_inverse);
+            let aff_y = proj_y_field.mul(z_inverse);
+            buff = Vec::<u8>::with_capacity(size_of::<G1Affine>());
+            aff_x.write(&mut buff).unwrap();
+            aff_y.write(&mut buff).unwrap();
+        } else if TypeId::of::<G>() == TypeId::of::<G2Affine>() {
+            let (result, _, _) = device_g2::msm_calc(&points_bytes, &scalars_bytes, size);
+            let proj_x_field =
+                Fq2::from_random_bytes(&[result[5].to_vec(), result[2].to_vec()].concat()).unwrap();
+            let proj_y_field =
+                Fq2::from_random_bytes(&[result[4].to_vec(), result[1].to_vec()].concat()).unwrap();
+            let proj_z_field =
+                Fq2::from_random_bytes(&[result[3].to_vec(), result[0].to_vec()].concat()).unwrap();
 
-        let aff_x = proj_x_field.mul(proj_z_field.inverse().unwrap());
-        let aff_y = proj_y_field.mul(proj_z_field.inverse().unwrap());
+            let z_inverse = proj_z_field.inverse().unwrap();
+            let aff_x = proj_x_field.mul(z_inverse);
+            let aff_y = proj_y_field.mul(z_inverse);
+            buff = Vec::<u8>::with_capacity(size_of::<G2Affine>());
+            aff_x.write(&mut buff).unwrap();
+            aff_y.write(&mut buff).unwrap();
+        } else {
+            todo!("unsupported curve type")
+        }
 
-        let mut buff = Vec::<u8>::with_capacity(buff_size);
-        aff_x.write(&mut buff).unwrap();
-        aff_y.write(&mut buff).unwrap();
         buff.push(0);
-
         G::read(buff.as_slice()).unwrap().into_projective()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use ark_bls12_377::G1Affine;
-    use ark_ec::{AffineCurve, ProjectiveCurve};
-    use ark_ff::{UniformRand, PrimeField};
-    use ark_std::{test_rng, rand::Rng};
-    use num_bigint::BigUint;
-    use super::get_formatted_unified_points_from_affine;
+    use ark_ec::{msm::VariableBaseMSM, AffineCurve, ProjectiveCurve};
+    use ark_ff::{PrimeField, UniformRand};
+    use ark_std::test_rng;
 
-    const BYTE_SIZE_POINT_COORD: usize = 48; // for BLS
+    use std::str::FromStr;
 
-    // ingonyama's implementation for asserting equality 
-    fn get_formatted_unified_points_from_biguint(points: &Vec<BigUint>) -> Vec<u8> {
-        let mut points_bytes: Vec<u8> = Vec::new();
-        for i in 0..points.len(){
-            let mut bytes_array = points[i].to_bytes_le();
-            bytes_array.extend(std::iter::repeat(0).take(BYTE_SIZE_POINT_COORD - bytes_array.len()));
-            points_bytes.extend(bytes_array);
-        }
-        points_bytes
-    }
+    use super::curve::*;
 
-    fn generate_points_scalars<G: AffineCurve, R: Rng>(len: usize, rng: &mut R) -> Vec<G> {
-    
-        <G::Projective as ProjectiveCurve>::batch_normalization_into_affine(
-            &(0..len)
-                .map(|_| G::Projective::rand(rng))
+    use super::HardwareVariableBaseMSM;
+
+    fn generate_points_scalars<G: AffineCurve>(
+        len: usize,
+    ) -> (Vec<G>, Vec<<G::ScalarField as PrimeField>::BigInt>) {
+        let rng = &mut test_rng();
+        (
+            <G::Projective as ProjectiveCurve>::batch_normalization_into_affine(
+                &(0..len)
+                    .map(|_| G::Projective::rand(rng))
+                    .collect::<Vec<_>>(),
+            ),
+            (0..len)
+                .map(|_| G::ScalarField::rand(rng).into_repr())
                 .collect::<Vec<_>>(),
         )
     }
 
+    fn msm_correctness<G: AffineCurve>() {
+        let test_npow = std::env::var("TEST_NPOW").unwrap_or("11".to_string());
+        let n_points = i32::from_str(&test_npow).unwrap();
+
+        let len = 1 << n_points;
+        let (points, scalars) = generate_points_scalars::<G>(len);
+
+        let msm_ark_projective = VariableBaseMSM::multi_scalar_mul(&points.to_vec(), &scalars);
+
+        let ret = HardwareVariableBaseMSM::multi_scalar_mul(&points, &scalars);
+        assert_eq!(ret, msm_ark_projective);
+    }
+
     #[test]
-    fn test_affine_to_bytes() {
-        let mut rng = test_rng();
-        let len = 100;
+    fn msm_correctness_g1() {
+        msm_correctness::<G1Affine>();
+    }
 
-        let points: Vec<G1Affine> = generate_points_scalars(len, &mut rng);
-
-        let points_as_big_int = points.iter()
-        .map(|point| [point.y.into_repr().into(), point.x.into_repr().into()])
-        .flatten()
-        .collect::<Vec<BigUint>>();
-
-        let point_bytes_biguint = get_formatted_unified_points_from_biguint(&points_as_big_int);
-        let (point_bytes_affine, _) = get_formatted_unified_points_from_affine(&points);
-
-        assert_eq!(point_bytes_biguint, point_bytes_affine);
+    #[test]
+    fn msm_correctness_g2() {
+        msm_correctness::<G2Affine>();
     }
 }

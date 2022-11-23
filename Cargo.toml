@@ -9,9 +9,12 @@ edition = "2021"
 ark-ec = { version="^0.3.0", default-features = false }
 ark-ff = { version="^0.3.0", default-features = false }
 rust-rw-device = { git = "https://github.com/vhnatyk/cloud-ZK", branch = "dev/vhnat/feature/bn254" }
+rust-rw-device-g2 = { git = "https://github.com/vhnatyk/cloud-ZK", branch = "dev/vhnat/feature/bn254" }
+ark-bn254 = { version = "^0.3.0", features = ["curve"], optional=true }
+rayon={ version="1.6.0"}
 
 [dev-dependencies]
-ark-bls12-377 = "0.3.0"
-ark-bn254 = "0.3.0"
 ark-std = "0.3.0"
-num-bigint = "0.4.3"
+
+[features]
+default=["ark-bn254"]
