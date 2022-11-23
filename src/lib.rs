@@ -173,7 +173,7 @@ mod test {
     fn generate_points_scalars<G: AffineCurve>(
         len: usize,
     ) -> (Vec<G>, Vec<<G::ScalarField as PrimeField>::BigInt>) {
-        let mut rng = &mut test_rng();
+        let rng = &mut test_rng();
         (
             <G::Projective as ProjectiveCurve>::batch_normalization_into_affine(
                 &(0..len)
