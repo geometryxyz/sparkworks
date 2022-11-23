@@ -4,16 +4,13 @@ use ark_ec::AffineCurve;
 use ark_ff::{BigInteger, Field, PrimeField, ToBytes};
 use rayon::{prelude::IndexedParallelIterator, slice::ParallelSliceMut};
 
-#[cfg(feature = "ark-bls12-377")]
-pub use ark_bls12_377 as curve;
-
 #[cfg(feature = "ark-bn254")]
 pub use ark_bn254 as curve;
 
 use self::curve::{Fq, Fq2, G1Affine, G2Affine};
 
-use rust_rw_device::rw_msm_to_dram as device_g1; //TODO: unify to one crate
-use rust_rw_device_g2::rw_msm_to_dram as device_g2; //TODO: unify to one crate
+use rust_rw_device::rw_msm_to_dram as device_g1;
+use rust_rw_device_g2::rw_msm_to_dram as device_g2;
 
 use std::{any::TypeId, io::Cursor};
 
