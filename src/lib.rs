@@ -103,8 +103,9 @@ impl HardwareVariableBaseMSM {
             let proj_x_field = Fq::from_random_bytes(&result[0]).unwrap();
             let proj_y_field = Fq::from_random_bytes(&result[1]).unwrap();
             let proj_z_field = Fq::from_random_bytes(&result[2]).unwrap();
-            let aff_x = proj_x_field.mul(proj_z_field.inverse().unwrap());
-            let aff_y = proj_y_field.mul(proj_z_field.inverse().unwrap());
+            let z_inverse = proj_z_field.inverse().unwrap();
+            let aff_x = proj_x_field.mul(z_inverse);
+            let aff_y = proj_y_field.mul(z_inverse);
             buff = Vec::<u8>::with_capacity(size_of::<G1Affine>());
             aff_x.write(&mut buff).unwrap();
             aff_y.write(&mut buff).unwrap();
@@ -117,8 +118,9 @@ impl HardwareVariableBaseMSM {
             let proj_z_field =
                 Fq2::from_random_bytes(&[result[3].to_vec(), result[0].to_vec()].concat()).unwrap();
 
-            let aff_x = proj_x_field.mul(proj_z_field.inverse().unwrap());
-            let aff_y = proj_y_field.mul(proj_z_field.inverse().unwrap());
+            let z_inverse = proj_z_field.inverse().unwrap();
+            let aff_x = proj_x_field.mul(z_inverse);
+            let aff_y = proj_y_field.mul(z_inverse);
             buff = Vec::<u8>::with_capacity(size_of::<G2Affine>());
             aff_x.write(&mut buff).unwrap();
             aff_y.write(&mut buff).unwrap();
