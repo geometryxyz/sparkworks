@@ -15,14 +15,13 @@ use self::curve::{Fq, Fq2, G1Affine, G2Affine};
 use rust_rw_device::rw_msm_to_dram as device_g1; //TODO: unify to one crate
 use rust_rw_device_g2::rw_msm_to_dram as device_g2; //TODO: unify to one crate
 
-use std::{any::TypeId, io::Cursor, time::Instant};
+use std::{any::TypeId, io::Cursor};
 
 use std::mem::size_of;
 
 use rayon::iter::ParallelIterator;
 
 fn points_to_bytes<G: AffineCurve>(points: &[G]) -> Vec<u8> {
-    //TODO: this semi-generic method needs/can to be fully generic?
     let mut buff = Vec::<u8>::new();
 
     let field_size = size_of::<G::BaseField>();
@@ -79,7 +78,6 @@ impl HardwareVariableBaseMSM {
         bases: &[G],
         scalars: &[<G::ScalarField as PrimeField>::BigInt],
     ) -> G::Projective {
-        let start = Instant::now();
         let size = std::cmp::min(bases.len(), scalars.len());
         let scalars = &scalars[..size];
         let bases = &bases[..size];
@@ -94,28 +92,14 @@ impl HardwareVariableBaseMSM {
                 scalars_filtered.push(scalars[i]);
             }
         }
-        let filtering = start.elapsed();
-        println!("filtering elapsed is: {:?} for size: {}", filtering, size);
         let points_bytes = points_to_bytes(&bases_filtered);
-        let points_conversion = start.elapsed() - filtering;
-        println!(
-            "points conversion trait elapsed is: {:?} for size: {}",
-            points_conversion, size
-        );
         let scalars_bytes = scalars_to_bytes::<G>(&scalars_filtered);
-        let scalars_conversion = start.elapsed() - points_conversion;
-        println!(
-            "scalars conversion trait elapsed is: {:?} for size: {}",
-            scalars_conversion, size
-        );
-
         let mut buff: Vec<u8>;
         let scalar_size = size_of::<G::ScalarField>();
         let size = scalars_bytes.len() / scalar_size;
 
         if TypeId::of::<G>() == TypeId::of::<G1Affine>() {
             let (result, _, _) = device_g1::msm_calc(&points_bytes, &scalars_bytes, size);
-            //TODO: this conversion should be part of Ingo API
             let proj_x_field = Fq::from_random_bytes(&result[0]).unwrap();
             let proj_y_field = Fq::from_random_bytes(&result[1]).unwrap();
             let proj_z_field = Fq::from_random_bytes(&result[2]).unwrap();
@@ -143,18 +127,7 @@ impl HardwareVariableBaseMSM {
         }
 
         buff.push(0);
-        let ret = G::read(buff.as_slice()).unwrap().into_projective();
-        println!(
-            "Ingo msm_cloud_generic elapsed is: {:?} for size: {}",
-            start.elapsed() - scalars_conversion,
-            size
-        );
-        println!(
-            "Ingo trait total elapsed is: {:?} for size: {}",
-            start.elapsed(),
-            size
-        );
-        ret
+        G::read(buff.as_slice()).unwrap().into_projective()
     }
 }
 
